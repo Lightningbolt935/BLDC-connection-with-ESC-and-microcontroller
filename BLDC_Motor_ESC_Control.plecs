@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PLECS version="4.7" name="BLDC_Motor_ESC_Control">
+  
+  <!-- Model Information -->
+  <ModelInfo>
+    <Description>BLDC Motor with ESC and Microcontroller Control</Description>
+    <Author>Claude AI</Author>
+    <Version>1.0</Version>
+  </ModelInfo>
+  
+  <!-- Circuit Components -->
+  <Circuit name="Main">
+    
+    <!-- Battery Source -->
+    <Component type="VoltageSource" name="Battery" id="V1">
+      <Position x="50" y="100"/>
+      <Parameter name="Voltage" value="24"/>
+      <Parameter name="Series_Resistance" value="0.05"/>
+    </Component>
+    
+    <!-- DC Link Capacitor -->
+    <Component type="Capacitor" name="DC_Link_Cap" id="C1">
+      <Position x="150" y="100"/>
+      <Parameter name="Capacitance" value="1000e-6"/>
+      <Parameter name="Initial_Voltage" value="24"/>
+    </Component>
+    
+    <!-- 3-Phase Inverter (ESC) -->
+    <Component type="ThreePhaseInverter" name="ESC_Inverter" id="INV1">
+      <Position x="300" y="150"/>
+      <Parameter name="Switch_Type" value="MOSFET"/>
+      <Parameter name="Ron" value="0.01"/>
+      <Parameter name="Roff" value="1e6"/>
+      <Parameter name="Dead_Time" value="1e-6"/>
+    </Component>
+    
+    <!-- BLDC Motor -->
+    <Component type="PMSMMotor" name="BLDC_Motor" id="M1">
+      <Position x="500" y="150"/>
+      <Parameter name="Stator_Resistance" value="0.2"/>
+      <Parameter name="d_axis_Inductance" value="0.5e-3"/>
+      <Parameter name="q_axis_Inductance" value="0.5e-3"/>
+      <Parameter name="Flux_Linkage" value="0.012"/>
+      <Parameter name="Pole_Pairs" value="7"/>
+      <Parameter name="Inertia" value="5e-5"/>
+      <Parameter name="Friction_Coefficient" value="1e-6"/>
+    </Component>
+    
+    <!-- Load Torque -->
+    <Component type="TorqueSource" name="Load" id="TL1">
+      <Position x="600" y="150"/>
+      <Parameter name="Torque" value="0.01"/>
+    </Component>
+    
+    <!-- Hall Sensors -->
+    <Component type="HallSensors" name="Hall_Sensors" id="HS1">
+      <Position x="450" y="250"/>
+      <Parameter name="Pole_Pairs" value="7"/>
+      <Parameter name="Offset_Angle" value="0"/>
+    </Component>
+    
+    <!-- Speed Reference -->
+    <Component type="Step" name="Speed_Ref" id="REF1">
+      <Position x="50" y="300"/>
+      <Parameter name="Initial_Value" value="0"/>
+      <Parameter name="Final_Value" value="2000"/>
+      <Parameter name="Step_Time" value="0.1"/>
+    </Component>
+    
+    <!-- Control System (C-Script) -->
+    <Component type="CScript" name="BLDC_Controller" id="CTRL1">
+      <Position x="200" y="300"/>
+      <Parameter name="Sample_Time" value="50e-6"/>
+      <Parameter name="Number_of_Inputs" value="4"/>
+      <Parameter name="Number_of_Outputs" value="6"/>
+      <Script>
+        <![CDATA[
+        // BLDC Motor Controller with 6-Step Commutation
+        
+        // Input signals
+        double hall_a = InputSignal(0);
+        double hall_b = InputSignal(1);
+        double hall_c = InputSignal(2);
+        double speed_ref = InputSignal(3);
+        
+        // Static variables to maintain state
+        static double integral_error = 0;
+        static double prev_speed = 0;
+        
+        // PI Controller parameters
+        double kp = 0.01;
+        double ki = 50;
+        double dt = 50e-6;  // Sample time
+        
+        // Get hall sensor state (0-7)
+        int hall_state = (int)(4*hall_a + 2*hall_b + hall_c);
+        
+        // Speed feedback (simplified - in practice would come from encoder)
+        double actual_speed = prev_speed; // Placeholder
+        
+        // PI Speed Controller
+        double speed_error = speed_ref - actual_speed;
+        integral_error += speed_error * dt;
+        
+        // Anti-windup
+        if (integral_error > 1.0) integral_error = 1.0;
+        if (integral_error < -1.0) integral_error = -1.0;
+        
+        double pwm_duty = kp * speed_error + ki * integral_error;
+        
+        // Limit PWM duty cycle
+        if (pwm_duty > 0.95) pwm_duty = 0.95;
+        if (pwm_duty < 0.0) pwm_duty = 0.0;
+        
+        // 6-Step Commutation Logic
+        // Initialize all outputs to 0
+        for (int i = 0; i < 6; i++) {
+            OutputSignal(i) = 0;
+        }
+        
+        switch (hall_state) {
+            case 5: // Hall: 101 -> Phase A+, B-
+                OutputSignal(0) = pwm_duty;  // Upper A (Q1)
+                OutputSignal(3) = 1;         // Lower B (Q4)
+                break;
+                
+            case 4: // Hall: 100 -> Phase A+, C-
+                OutputSignal(0) = pwm_duty;  // Upper A (Q1)
+                OutputSignal(5) = 1;         // Lower C (Q6)
+                break;
+                
+            case 6: // Hall: 110 -> Phase B+, C-
+                OutputSignal(2) = pwm_duty;  // Upper B (Q3)
+                OutputSignal(5) = 1;         // Lower C (Q6)
+                break;
+                
+            case 2: // Hall: 010 -> Phase B+, A-
+                OutputSignal(2) = pwm_duty;  // Upper B (Q3)
+                OutputSignal(1) = 1;         // Lower A (Q2)
+                break;
+                
+            case 3: // Hall: 011 -> Phase C+, A-
+                OutputSignal(4) = pwm_duty;  // Upper C (Q5)
+                OutputSignal(1) = 1;         // Lower A (Q2)
+                break;
+                
+            case 1: // Hall: 001 -> Phase C+, B-
+                OutputSignal(4) = pwm_duty;  // Upper C (Q5)
+                OutputSignal(3) = 1;         // Lower B (Q4)
+                break;
+                
+            default: // Invalid state - turn off all switches
+                for (int i = 0; i < 6; i++) {
+                    OutputSignal(i) = 0;
+                }
+                break;
+        }
+        ]]>
+      </Script>
+    </Component>
+    
+    <!-- Current Sensors -->
+    <Component type="CurrentSensor" name="I_Phase_A" id="IA1">
+      <Position x="350" y="120"/>
+    </Component>
+    
+    <Component type="CurrentSensor" name="I_Phase_B" id="IB1">
+      <Position x="350" y="150"/>
+    </Component>
+    
+    <Component type="CurrentSensor" name="I_Phase_C" id="IC1">
+      <Position x="350" y="180"/>
+    </Component>
+    
+    <!-- Voltage Sensors -->
+    <Component type="VoltageSensor" name="DC_Link_Voltage" id="VDC1">
+      <Position x="150" y="200"/>
+    </Component>
+    
+    <!-- Scopes for monitoring -->
+    <Component type="Scope" name="Motor_Currents" id="SCOPE1">
+      <Position x="700" y="100"/>
+      <Parameter name="Number_of_Inputs" value="3"/>
+      <Parameter name="Time_Range" value="0.5"/>
+    </Component>
+    
+    <Component type="Scope" name="Speed_Control" id="SCOPE2">
+      <Position x="250" y="400"/>
+      <Parameter name="Number_of_Inputs" value="2"/>
+      <Parameter name="Time_Range" value="2"/>
+    </Component>
+    
+    <Component type="Scope" name="Hall_Signals" id="SCOPE3">
+      <Position x="500" y="350"/>
+      <Parameter name="Number_of_Inputs" value="3"/>
+      <Parameter name="Time_Range" value="0.1"/>
+    </Component>
+    
+  </Circuit>
+  
+  <!-- Connections -->
+  <Connections>
+    <!-- Power connections -->
+    <Wire from="V1.+" to="C1.+"/>
+    <Wire from="V1.-" to="C1.-"/>
+    <Wire from="C1.+" to="INV1.DC+"/>
+    <Wire from="C1.-" to="INV1.DC-"/>
+    
+    <!-- Motor connections -->
+    <Wire from="INV1.A" to="IA1.+" via="M1.A"/>
+    <Wire from="INV1.B" to="IB1.+" via="M1.B"/>
+    <Wire from="INV1.C" to="IC1.+" via="M1.C"/>
+    <Wire from="IA1.-" to="M1.A"/>
+    <Wire from="IB1.-" to="M1.B"/>
+    <Wire from="IC1.-" to="M1.C"/>
+    
+    <!-- Load connection -->
+    <Wire from="M1.Shaft" to="TL1.Shaft"/>
+    
+    <!-- Hall sensor connections -->
+    <Wire from="M1.Rotor_Position" to="HS1.Position"/>
+    
+    <!-- Control connections -->
+    <Wire from="HS1.Hall_A" to="CTRL1.Input0"/>
+    <Wire from="HS1.Hall_B" to="CTRL1.Input1"/>
+    <Wire from="HS1.Hall_C" to="CTRL1.Input2"/>
+    <Wire from="REF1.Output" to="CTRL1.Input3"/>
+    
+    <!-- PWM connections to inverter -->
+    <Wire from="CTRL1.Output0" to="INV1.Gate_A_Upper"/>
+    <Wire from="CTRL1.Output1" to="INV1.Gate_A_Lower"/>
+    <Wire from="CTRL1.Output2" to="INV1.Gate_B_Upper"/>
+    <Wire from="CTRL1.Output3" to="INV1.Gate_B_Lower"/>
+    <Wire from="CTRL1.Output4" to="INV1.Gate_C_Upper"/>
+    <Wire from="CTRL1.Output5" to="INV1.Gate_C_Lower"/>
+    
+    <!-- Measurement connections -->
+    <Wire from="VDC1.Output" to="SCOPE2.Input0"/>
+    <Wire from="IA1.Output" to="SCOPE1.Input0"/>
+    <Wire from="IB1.Output" to="SCOPE1.Input1"/>
+    <Wire from="IC1.Output" to="SCOPE1.Input2"/>
+    
+    <Wire from="REF1.Output" to="SCOPE2.Input0"/>
+    <Wire from="M1.Speed" to="SCOPE2.Input1"/>
+    
+    <Wire from="HS1.Hall_A" to="SCOPE3.Input0"/>
+    <Wire from="HS1.Hall_B" to="SCOPE3.Input1"/>
+    <Wire from="HS1.Hall_C" to="SCOPE3.Input2"/>
+  </Connections>
+  
+  <!-- Simulation Settings -->
+  <SimulationSettings>
+    <Parameter name="Stop_Time" value="2.0"/>
+    <Parameter name="Max_Time_Step" value="1e-6"/>
+    <Parameter name="Relative_Tolerance" value="1e-4"/>
+    <Parameter name="Absolute_Tolerance" value="1e-6"/>
+  </SimulationSettings>
+  
+</PLECS>
