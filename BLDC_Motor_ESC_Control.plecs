@@ -4,7 +4,7 @@
   <!-- Model Information -->
   <ModelInfo>
     <Description>BLDC Motor with ESC and Microcontroller Control</Description>
-    <Author>Claude AI</Author>
+    <Author>Snehil Sahay</Author>
     <Version>1.0</Version>
   </ModelInfo>
   
